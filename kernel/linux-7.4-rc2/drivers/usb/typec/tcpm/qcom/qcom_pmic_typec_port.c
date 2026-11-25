@@ -7,6 +7,7 @@
 #include <linux/err.h>
 #include <linux/interrupt.h>
 #include <linux/kernel.h>
+#include <linux/math64.h>
 #include <linux/module.h>
 #include <linux/of.h>
 #include <linux/platform_device.h>
@@ -332,6 +333,76 @@ static int qcom_pmic_typec_port_get_vbus(struct tcpc_dev *tcpc)
 	mutex_unlock(&pmic_typec_port->vbus_lock);
 
 	return ret;
+}
+
+/* PM8150B SMB5 charger registers (50 mA/LSB, verified against factory SM8250 kernel) */
+#define PM8150B_CHGR_FCC_CFG			0x1061
+#define PM8150B_USBIN_CMD_ICL_OVERRIDE		0x1341
+#define PM8150B_USBIN_ICL_OVERRIDE_BIT		BIT(0)
+#define PM8150B_USBIN_ADAPTER_ALLOW_CFG		0x1360
+#define PM8150B_USBIN_ADAPTER_ALLOW_5V_9V_12V	0x07
+#define PM8150B_USBIN_ICL_OPTIONS		0x1366
+#define PM8150B_USBIN_MODE_CHG_BIT		BIT(0)
+#define PM8150B_USB51_MODE_BIT			BIT(1)
+#define PM8150B_USBIN_CURRENT_LIMIT_CFG		0x1370
+#define PM8150B_SMB5_CURRENT_STEP_MA		50
+
+static int qcom_pmic_typec_port_set_current_limit(struct tcpc_dev *tcpc,
+						  u32 max_ma, u32 mv)
+{
+	struct pmic_typec *tcpm = tcpc_to_tcpm(tcpc);
+	struct pmic_typec_port *pmic_typec_port = tcpm->pmic_typec_port;
+	struct regmap *regmap = pmic_typec_port->regmap;
+	u32 icl_ma, fcc_ma;
+	u64 input_mw;
+	int ret;
+
+	if (!max_ma || !mv) {
+		regmap_update_bits(regmap, PM8150B_USBIN_CMD_ICL_OVERRIDE,
+				   PM8150B_USBIN_ICL_OVERRIDE_BIT, 0);
+		regmap_write(regmap, PM8150B_USBIN_CURRENT_LIMIT_CFG,
+			     500 / PM8150B_SMB5_CURRENT_STEP_MA);
+		regmap_write(regmap, PM8150B_CHGR_FCC_CFG,
+			     2000 / PM8150B_SMB5_CURRENT_STEP_MA);
+		return 0;
+	}
+
+	icl_ma = clamp_t(u32, max_ma, 500, 3000);
+	input_mw = div_u64((u64)mv * icl_ma, 1000);
+	fcc_ma = clamp_t(u32, div_u64(input_mw * 880, 4000), 1000, 4200);
+
+	regmap_write(regmap, PM8150B_USBIN_ADAPTER_ALLOW_CFG,
+		     PM8150B_USBIN_ADAPTER_ALLOW_5V_9V_12V);
+
+	ret = regmap_write(regmap, PM8150B_USBIN_CURRENT_LIMIT_CFG,
+			   icl_ma / PM8150B_SMB5_CURRENT_STEP_MA);
+	if (ret)
+		return ret;
+
+	if (icl_ma > 500) {
+		regmap_update_bits(regmap, PM8150B_USBIN_ICL_OPTIONS,
+				   PM8150B_USBIN_MODE_CHG_BIT | PM8150B_USB51_MODE_BIT,
+				   PM8150B_USBIN_MODE_CHG_BIT);
+		regmap_update_bits(regmap, PM8150B_USBIN_CMD_ICL_OVERRIDE,
+				   PM8150B_USBIN_ICL_OVERRIDE_BIT,
+				   PM8150B_USBIN_ICL_OVERRIDE_BIT);
+	} else {
+		regmap_update_bits(regmap, PM8150B_USBIN_ICL_OPTIONS,
+				   PM8150B_USBIN_MODE_CHG_BIT | PM8150B_USB51_MODE_BIT,
+				   PM8150B_USB51_MODE_BIT);
+		regmap_update_bits(regmap, PM8150B_USBIN_CMD_ICL_OVERRIDE,
+				   PM8150B_USBIN_ICL_OVERRIDE_BIT, 0);
+	}
+
+	ret = regmap_write(regmap, PM8150B_CHGR_FCC_CFG,
+			   fcc_ma / PM8150B_SMB5_CURRENT_STEP_MA);
+	if (ret)
+		return ret;
+
+	dev_info(pmic_typec_port->dev,
+		 "pm8150b charger: negotiated %umV %umA -> ICL=%umA FCC=%umA\n",
+		 mv, max_ma, icl_ma, fcc_ma);
+	return 0;
 }
 
 static int qcom_pmic_typec_port_set_vbus(struct tcpc_dev *tcpc, bool on, bool sink)
@@ -771,6 +842,7 @@ int qcom_pmic_typec_port_probe(struct platform_device *pdev,
 
 	tcpm->tcpc.get_vbus = qcom_pmic_typec_port_get_vbus;
 	tcpm->tcpc.set_vbus = qcom_pmic_typec_port_set_vbus;
+	tcpm->tcpc.set_current_limit = qcom_pmic_typec_port_set_current_limit;
 	tcpm->tcpc.set_cc = qcom_pmic_typec_port_set_cc;
 	tcpm->tcpc.get_cc = qcom_pmic_typec_port_get_cc;
 	tcpm->tcpc.set_polarity = qcom_pmic_typec_port_set_polarity;

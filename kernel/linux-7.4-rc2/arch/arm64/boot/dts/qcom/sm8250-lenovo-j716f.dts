@@ -11,6 +11,7 @@
 #include <dt-bindings/sound/qcom,q6asm.h>
 #include <dt-bindings/clock/qcom,camcc-sm8250.h>
 #include <dt-bindings/phy/phy.h>
+#include <dt-bindings/usb/pd.h>
 #include <dt-bindings/regulator/qcom,rpmh-regulator.h>
 #include "sm8250.dtsi"
 #include "pm8009.dtsi"
@@ -2502,7 +2503,11 @@
 		self-powered;
 		vbus-supply = <&pm8150b_vbus>;
 		/* Validate data-role switching without PD resets during enumeration. */
-		pd-disable;
+		op-sink-microwatt = <22500000>;
+		source-pdos = <PDO_FIXED(5000, 1500, PDO_FIXED_DUAL_ROLE | PDO_FIXED_USB_COMM | PDO_FIXED_DATA_SWAP)>;
+		sink-pdos = <PDO_FIXED(5000, 3000, PDO_FIXED_DUAL_ROLE | PDO_FIXED_USB_COMM | PDO_FIXED_DATA_SWAP)
+			     PDO_FIXED(9000, 2500, PDO_FIXED_DUAL_ROLE | PDO_FIXED_USB_COMM | PDO_FIXED_DATA_SWAP)
+			     PDO_FIXED(12000, 2000, PDO_FIXED_DUAL_ROLE | PDO_FIXED_USB_COMM | PDO_FIXED_DATA_SWAP)>;
 		typec-power-opmode = "default";
 
 		ports {
