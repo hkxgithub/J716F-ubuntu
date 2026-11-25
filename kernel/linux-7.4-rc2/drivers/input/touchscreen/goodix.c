@@ -1833,7 +1833,7 @@ static int goodix_resume(struct device *dev)
 
 		error = goodix_send_cfg(ts, ts->config, ts->chip->config_len);
 		if (error)
-			return error;
+			dev_warn(dev, "goodix_send_cfg failed (%d) on resume, keeping flash config\n", error);
 	}
 
 	error = goodix_request_irq(ts);
