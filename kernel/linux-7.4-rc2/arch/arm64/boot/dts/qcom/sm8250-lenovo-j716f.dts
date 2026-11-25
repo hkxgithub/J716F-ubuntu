@@ -111,6 +111,16 @@
 	};
 
 	reserved-memory {
+		xbl_uefi_log_mem: memory@80880000 {
+			reg = <0x0 0x80880000 0x0 0x14000>;
+			no-map;
+		};
+
+		dfps_data_mem: memory@9e300000 {
+			reg = <0x0 0x9e300000 0x0 0x100000>;
+			no-map;
+		};
+
 		cont_splash_mem: memory@9c000000 {
 			reg = <0x0 0x9c000000 0x0 0x2300000>;
 			no-map;
@@ -2532,4 +2542,16 @@
 
 &usb_1_qmpphy_out {
 	remote-endpoint = <&j716f_redriver_phy>;
+};
+
+/*
+ * fastrpc_init_reserved_mem() transfers adsp_rpc_remote_heap_mem to ADSP via
+ * qcom_scm_assign_mem() without allocating it out of CMA. Marking it reusable
+ * lets Linux hand ADSP-owned XPU-protected pages to userspace, causing an
+ * immediate AXI bus hang (NMI-unresponsive hard lockup) on first write.
+ */
+&adsp_rpc_remote_heap_mem {
+	/delete-property/ compatible;
+	/delete-property/ reusable;
+	no-map;
 };
