@@ -2289,14 +2289,93 @@
 	status = "okay";
 };
 
+/*
+ * Disable the legacy nested usb_1 wrapper (dwc3-qcom-legacy) because it
+ * latches QSCRATCH VBUS override for peripheral mode and never clears it on
+ * usb-role-switch transitions to host mode. Use the flattened qcom,snps-dwc3
+ * node below so dwc3-qcom manages VBUS override via pre_set_role.
+ */
 &usb_1 {
-	status = "okay";
+	status = "disabled";
 };
 
-&usb_1_dwc3 {
-	dr_mode = "otg";
-	usb-role-switch;
-	role-switch-default-mode = "peripheral";
+&soc {
+	usb_1_flat: usb@a600000 {
+		compatible = "qcom,sm8250-dwc3", "qcom,snps-dwc3";
+		reg = <0 0x0a600000 0 0xf8c00>;
+
+		clocks = <&gcc GCC_CFG_NOC_USB3_PRIM_AXI_CLK>,
+			 <&gcc GCC_USB30_PRIM_MASTER_CLK>,
+			 <&gcc GCC_AGGRE_USB3_PRIM_AXI_CLK>,
+			 <&gcc GCC_USB30_PRIM_SLEEP_CLK>,
+			 <&gcc GCC_USB30_PRIM_MOCK_UTMI_CLK>,
+			 <&gcc GCC_USB3_SEC_CLKREF_EN>;
+		clock-names = "cfg_noc",
+			      "core",
+			      "iface",
+			      "sleep",
+			      "mock_utmi",
+			      "xo";
+
+		assigned-clocks = <&gcc GCC_USB30_PRIM_MOCK_UTMI_CLK>,
+				  <&gcc GCC_USB30_PRIM_MASTER_CLK>;
+		assigned-clock-rates = <19200000>, <200000000>;
+
+		interrupts-extended = <&intc GIC_SPI 133 IRQ_TYPE_LEVEL_HIGH>,
+				      <&intc GIC_SPI 130 IRQ_TYPE_LEVEL_HIGH>,
+				      <&intc GIC_SPI 131 IRQ_TYPE_LEVEL_HIGH>,
+				      <&pdc 14 IRQ_TYPE_EDGE_BOTH>,
+				      <&pdc 15 IRQ_TYPE_EDGE_BOTH>,
+				      <&pdc 17 IRQ_TYPE_LEVEL_HIGH>;
+		interrupt-names = "dwc_usb3",
+				  "pwr_event",
+				  "hs_phy_irq",
+				  "dp_hs_phy_irq",
+				  "dm_hs_phy_irq",
+				  "ss_phy_irq";
+
+		power-domains = <&gcc USB30_PRIM_GDSC>;
+		wakeup-source;
+
+		resets = <&gcc GCC_USB30_PRIM_BCR>;
+
+		interconnects = <&aggre1_noc MASTER_USB3 0 &mc_virt SLAVE_EBI_CH0 0>,
+				<&gem_noc MASTER_AMPSS_M0 0 &config_noc SLAVE_USB3 0>;
+		interconnect-names = "usb-ddr", "apps-usb";
+
+		iommus = <&apps_smmu 0x0 0x0>;
+		snps,dis_u2_susphy_quirk;
+		snps,dis_enblslpm_quirk;
+		snps,dis-u1-entry-quirk;
+		snps,dis-u2-entry-quirk;
+		phys = <&usb_1_hsphy>, <&usb_1_qmpphy QMP_USB43DP_USB3_PHY>;
+		phy-names = "usb2-phy", "usb3-phy";
+
+		dr_mode = "otg";
+		usb-role-switch;
+		role-switch-default-mode = "peripheral";
+
+		ports {
+			#address-cells = <1>;
+			#size-cells = <0>;
+
+			port@0 {
+				reg = <0>;
+
+				j716f_usb_hs_out: endpoint {
+					remote-endpoint = <&j716f_typec_hs>;
+				};
+			};
+
+			port@1 {
+				reg = <1>;
+
+				j716f_usb_ss_out: endpoint {
+					remote-endpoint = <&usb_1_qmpphy_usb_ss_in>;
+				};
+			};
+		};
+	};
 };
 
 &usb_1_hsphy {
@@ -2482,11 +2561,25 @@
 	status = "disabled";
 };
 
+/*
+ * Factory DTBO (fragment@2, qcom,qpnp-smb5) defines:
+ *   qcom,boost_en = <&pm8150b_gpios 2 GPIO_ACTIVE_HIGH>;
+ * and smblib_vbus_regulator_enable/disable drives PM8150B GPIO 2 to control
+ * the external 5V USB-C OTG boost instead of PM8150B internal CMD_OTG.
+ */
+/ {
+	vreg_usb_otg_vbus: regulator-usb-otg-vbus {
+		compatible = "regulator-fixed";
+		regulator-name = "usb-c-otg-vbus";
+		regulator-min-microvolt = <5000000>;
+		regulator-max-microvolt = <5000000>;
+		gpio = <&pm8150b_gpios 2 GPIO_ACTIVE_HIGH>;
+		enable-active-high;
+	};
+};
+
 &pm8150b_vbus {
-	regulator-name = "usb-c-vbus";
-	regulator-min-microamp = <500000>;
-	regulator-max-microamp = <500000>;
-	status = "okay";
+	status = "disabled";
 };
 
 &pm8150b_typec {
@@ -2500,7 +2593,7 @@
 		data-role = "dual";
 		try-power-role = "sink";
 		self-powered;
-		vbus-supply = <&pm8150b_vbus>;
+		vbus-supply = <&vreg_usb_otg_vbus>;
 		/* Validate data-role switching without PD resets during enumeration. */
 		pd-disable;
 		typec-power-opmode = "default";
@@ -2512,7 +2605,7 @@
 			port@0 {
 				reg = <0>;
 				j716f_typec_hs: endpoint {
-					remote-endpoint = <&usb_1_dwc3_hs_out>;
+					remote-endpoint = <&j716f_usb_hs_out>;
 				};
 			};
 
@@ -2526,8 +2619,8 @@
 	};
 };
 
-&usb_1_dwc3_hs_out {
-	remote-endpoint = <&j716f_typec_hs>;
+&usb_1_qmpphy_usb_ss_in {
+	remote-endpoint = <&j716f_usb_ss_out>;
 };
 
 &usb_1_qmpphy_out {
