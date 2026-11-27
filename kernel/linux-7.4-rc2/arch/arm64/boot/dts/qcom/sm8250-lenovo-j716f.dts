@@ -1055,7 +1055,7 @@
 		 * Without the configuration the controller answers 0xff at
 		 * 0x8040 and never enters normal reporting mode.
 		 */
-		goodix,config-name = "j716f_cfg.bin";
+		/* Uses Goodix controller flash config directly (no j716f_cfg.bin needed). */
 
 		/*
 		 * The vendor dtbo's __symbols__ node gives the authoritative rail
