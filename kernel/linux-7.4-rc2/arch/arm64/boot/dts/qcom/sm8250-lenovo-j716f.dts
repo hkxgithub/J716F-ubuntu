@@ -7,6 +7,7 @@
 
 #include <dt-bindings/arm/qcom,ids.h>
 #include <dt-bindings/gpio/gpio.h>
+#include <dt-bindings/input/linux-event-codes.h>
 #include <dt-bindings/leds/common.h>
 #include <dt-bindings/sound/qcom,q6afe.h>
 #include <dt-bindings/sound/qcom,q6asm.h>
@@ -109,6 +110,16 @@
 			debounce-interval = <15>;
 			linux,can-disable;
 			wakeup-source;
+		};
+
+		hall-sensor {
+			label = "Hall Effect Sensor";
+			gpios = <&tlmm 121 GPIO_ACTIVE_LOW>;
+			linux,input-type = <EV_SW>;
+			linux,code = <SW_LID>;
+			debounce-interval = <60>;
+			wakeup-source;
+			linux,can-disable;
 		};
 	};
 
