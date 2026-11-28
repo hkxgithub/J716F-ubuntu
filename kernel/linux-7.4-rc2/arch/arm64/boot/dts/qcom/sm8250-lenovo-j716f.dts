@@ -2591,7 +2591,7 @@
 };
 
 &pm8150b_vbus {
-	status = "disabled";
+	status = "okay";
 };
 
 &pm8150b_typec {
@@ -2605,7 +2605,7 @@
 		data-role = "dual";
 		try-power-role = "sink";
 		self-powered;
-		vbus-supply = <&vreg_usb_otg_vbus>;
+		vbus-supply = <&pm8150b_vbus>;
 		op-sink-microwatt = <22500000>;
 		source-pdos = <PDO_FIXED(5000, 1500,
 					 PDO_FIXED_DUAL_ROLE |

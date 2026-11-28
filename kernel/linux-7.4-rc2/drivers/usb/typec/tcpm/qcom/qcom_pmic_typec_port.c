@@ -7,7 +7,6 @@
 #include <linux/err.h>
 #include <linux/interrupt.h>
 #include <linux/kernel.h>
-#include <linux/math64.h>
 #include <linux/module.h>
 #include <linux/of.h>
 #include <linux/platform_device.h>
@@ -338,16 +337,17 @@ static int qcom_pmic_typec_port_get_vbus(struct tcpc_dev *tcpc)
 
 /* PM8150B SMB5 charger registers (50 mA/LSB, verified against factory SM8250 kernel) */
 #define PM8150B_CHGR_FCC_CFG			0x1061
-#define PM8150B_USBIN_APSD_STATUS		0x1306
+#define PM8150B_USBIN_APSD_STATUS		0x1307
 #define PM8150B_APSD_DONE_BIT			BIT(0)
-#define PM8150B_USBIN_APSD_RESULT		0x1307
+#define PM8150B_USBIN_APSD_RESULT		0x1308
 #define PM8150B_APSD_SDP_BIT			BIT(0)
+#define PM8150B_APSD_OCP_BIT			BIT(1)
 #define PM8150B_APSD_CDP_BIT			BIT(2)
 #define PM8150B_APSD_DCP_BIT			BIT(3)
 #define PM8150B_APSD_FLOAT_BIT			BIT(4)
-#define PM8150B_USBIN_QC_CHANGE_STATUS		0x1308
+#define PM8150B_USBIN_QC_CHANGE_STATUS		0x1309
 #define PM8150B_USBIN_CMD_ICL_OVERRIDE		0x1341
-#define PM8150B_USBIN_ICL_OVERRIDE_BIT		BIT(0)
+#define PM8150B_USBIN_ICL_OVERRIDE_BIT		BIT(1)
 #define PM8150B_USBIN_ADAPTER_ALLOW_CFG		0x1360
 #define PM8150B_USBIN_ADAPTER_ALLOW_5V_9V_12V	0x07
 #define PM8150B_USBIN_OPTIONS_1_CFG		0x1362
@@ -427,10 +427,11 @@ static void qcom_pmic_typec_hvdcp_work(struct work_struct *work)
 		dev_info(port->dev,
 			 "pm8150b charger: APSD DCP/HVDCP (res=0x%02x qc=0x%02x) -> ICL=2500mA FCC=4200mA\n",
 			 apsd_res, qc_stat);
-	} else if (apsd_res & (PM8150B_APSD_CDP_BIT | PM8150B_APSD_FLOAT_BIT)) {
+	} else if (apsd_res & (PM8150B_APSD_OCP_BIT | PM8150B_APSD_CDP_BIT |
+			       PM8150B_APSD_FLOAT_BIT)) {
 		qcom_pmic_typec_apply_limits(regmap, 1500, 1800);
 		dev_info(port->dev,
-			 "pm8150b charger: APSD CDP/FLOAT (res=0x%02x) -> ICL=1500mA FCC=1800mA\n",
+			 "pm8150b charger: APSD OCP/CDP/FLOAT (res=0x%02x) -> ICL=1500mA FCC=1800mA\n",
 			 apsd_res);
 	}
 }
@@ -442,10 +443,13 @@ static int qcom_pmic_typec_port_set_current_limit(struct tcpc_dev *tcpc,
 	struct pmic_typec_port *pmic_typec_port = tcpm->pmic_typec_port;
 	struct regmap *regmap = pmic_typec_port->regmap;
 	u32 icl_ma, fcc_ma;
-	u64 input_mw;
 	int ret;
 
-	if (!max_ma || !mv) {
+	/*
+	 * Standard USB-A to USB-C cables (56k Rp) report mv=5000, max_ma=0;
+	 * only treat mv == 0 as disconnect so A-to-C charging and HVDCP work.
+	 */
+	if (!mv) {
 		cancel_delayed_work(&pmic_typec_port->hvdcp_dwork);
 		regmap_update_bits(regmap, PM8150B_USBIN_CMD_ICL_OVERRIDE,
 				   PM8150B_USBIN_ICL_OVERRIDE_BIT, 0);
@@ -456,15 +460,18 @@ static int qcom_pmic_typec_port_set_current_limit(struct tcpc_dev *tcpc,
 		return 0;
 	}
 
-	icl_ma = clamp_t(u32, max_ma, 500, 3000);
-	input_mw = div_u64((u64)mv * icl_ma, 1000);
-	fcc_ma = clamp_t(u32, div_u64(input_mw * 880, 4000), 1000, 4200);
+	/*
+	 * Hardware AICL protects the adapter if VBUS droops; keep FCC at 4200 mA
+	 * so autonomous QC2.0/QC3.0 (9V/10V/12V HVDCP) can reach full 20W.
+	 */
+	icl_ma = clamp_t(u32, max_ma, 2200, 3000);
+	fcc_ma = 4200;
 
 	ret = qcom_pmic_typec_apply_limits(regmap, icl_ma, fcc_ma);
 	if (ret)
 		return ret;
 
-	if (icl_ma <= 500 && mv <= 5000) {
+	if (max_ma <= 500 && mv <= 5000) {
 		/* Legacy USB-A cable (56k Rp): re-check APSD/HVDCP after handshake */
 		mod_delayed_work(system_wq, &pmic_typec_port->hvdcp_dwork,
 				 msecs_to_jiffies(1500));
